@@ -121,6 +121,77 @@ CREATE INDEX idx_periods_dates
 ON patvisit (id, date_in, date_out);
 ```
 
+### ХИТРОСТЬ ПО ИЗМЕНЕНИЮ СЛОЖНЫХ ФУНКЦИЙ/ПРОЦЕДУР
+
+*Самая распространенная задача встречается, когда в огромную поломанную функцию тебя просят добавить одно поле. Для тех, кто не видел АД - это тривиальная задача. Но тот, кто видел труды извращенцев (дублирующийся запрос 13-50 раз подряд через UNION ALL или данные через REFCURSOR, где тебе нужно просто сделать маленький JOIN к другой таблице)* - **тот знает, что черт его знает, с какой стороны к этому БДСМ-коду подойти, чтобы не стать его частью.**
+
+> **Совет.** Не занимайся фигней! Делай функцию-обертку и болт клади на то, чтобы разбираться в этом зоопарке. Если те, кому платят больше, тоже его кладут на нормальную архитектуру - почему ты должен страдать?
+
+Что тебе даст обертка:
+ - **Безопасность** - накосячил? просто верни оригинальную функцию (ты её не трогал!)
+ - **Гибкость/расширяемость** - именно функция, а не процедура даёт гибкость. Любые данные, любые манипуляции с данными
+ - **Здоровые нервы** - ни один порядочный специалист-коллега не пожелает такого зла другому. Добавлять одно маленькое поле 18 раз в одинаковый код
+
+
+```sql
+CREATE OR REPLACE FUNCTION pol5_sh.get_flg_data(p_year character varying DEFAULT '2025'::character varying, p_struct_id character varying DEFAULT NULL::character varying, p_dep_code character varying DEFAULT NULL::character varying, p_level bigint DEFAULT NULL::bigint, p_mode bigint DEFAULT 1, p_malomob bigint DEFAULT 0)
+ RETURNS TABLE(fio character varying, birth character varying, num character varying, pin_oms character varying, last_dat character varying, plan_dates character varying, is_malomob character varying)
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    _cur refcursor;
+    _fio VARCHAR;
+    _birth VARCHAR;
+    _num VARCHAR;
+    _pin_oms VARCHAR;
+    _last_dat VARCHAR;
+    _plan_dates VARCHAR;
+    _is_malomob VARCHAR;
+BEGIN
+    -- Создаем временную таблицу со структурой сложной функции (в которой будущему SENIORу зазорно ковыряться)
+    CREATE TEMP TABLE temp_flg_result (
+        fio VARCHAR,
+        birth VARCHAR,
+        num VARCHAR,
+        pin_oms VARCHAR,
+        last_dat VARCHAR,
+        plan_dates VARCHAR,
+        is_malomob VARCHAR
+    ) ON COMMIT DROP;
+
+    /*
+      если процедура реальное исчадие АДА 
+      то добавь индекс (но смысл есть только на огромных данных! которые тебе не обработать)
+
+      CREATE INDEX ON temp_flg_result (num);  -- допустим мне по номеру карты 
+                                              -- нужно было определить пациента 
+                                              -- и добавить участок
+
+      P.S.  Только не добавляй индексы (ОСОБЕННО НА ВРЕМЕННУЮ ТАБЛИЦУ) после заполнения данными... 😈
+    */
+    
+    -- Вызываем их процедуру
+    CALL pkg_ru42_flg.plan_flg(p_year, p_struct_id, p_dep_code, p_level, p_mode, p_malomob, _cur);
+    
+    -- Читаем данные из курсора и вставляем во временную таблицу
+    LOOP
+        FETCH _cur INTO _fio, _birth, _num, _pin_oms, _last_dat, _plan_dates, _is_malomob;
+        EXIT WHEN NOT FOUND;
+        
+        INSERT INTO temp_flg_result VALUES (_fio, _birth, _num, _pin_oms, _last_dat, _plan_dates, _is_malomob);
+    END LOOP;
+    
+    -- Закрываем курсор
+    CLOSE _cur;
+    
+    -- Возвращаем данные из временной таблицы... можно прямо здесь модифицироваться запрос... 
+    RETURN QUERY SELECT * FROM temp_flg_result;
+    
+    -- Временная таблица удалится автоматически (ON COMMIT DROP)
+END;
+$function$
+;
+```
 
 ### ЛОКАЛЬНОЕ ИЗМЕНЕНИЕ СИСТЕМНЫХ КОНФИГОВ
 
